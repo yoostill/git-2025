@@ -1,13 +1,18 @@
 name: work-1
+
 on:
   push:
+    branches: [ main ]
     paths:
       - '.github/workflows/**'
       - 'src/**'
       - 'build.gradle'
       - 'Dockerfile'
-    branches:
-      - main
+
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   makeTagAndRelease:
     runs-on: ubuntu-latest
@@ -15,11 +20,13 @@ jobs:
       tag_name: ${{ steps.create_tag.outputs.new_tag }}
     steps:
       - uses: actions/checkout@v4
+
       - name: Create Tag
         id: create_tag
         uses: mathieudutour/github-tag-action@v6.2
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create Release
         id: create_release
         uses: actions/create-release@v1
@@ -31,29 +38,46 @@ jobs:
           body: ${{ steps.create_tag.outputs.changelog }}
           draft: false
           prerelease: false
+
   buildImageAndPush:
     name: 도커 이미지 빌드와 푸시
     needs: makeTagAndRelease
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      # 🔎 진단: 파일이 실제로 존재하는지 먼저 확인
+      - name: 진단 - 파일 존재 확인
+        run: |
+          echo "GITHUB_WORKSPACE=${GITHUB_WORKSPACE}"
+          echo "== ls -la =="
+          ls -la
+          echo "== ls -la .github/workflows =="
+          ls -la .github/workflows || true
+          test -f "${GITHUB_WORKSPACE}/.github/workflows/Dockerfile" \
+            && echo "✅ FOUND: .github/workflows/Dockerfile" \
+            || (echo "❌ MISSING: .github/workflows/Dockerfile"; exit 1)
+
       - name: Docker Buildx 설치
-        uses: docker/setup-buildx-action@v2
+        uses: docker/setup-buildx-action@v3
+
       - name: 레지스트리 로그인
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
       - name: set lower case owner name
-        run: |
-          echo "OWNER_LC=${OWNER,,}" >> ${GITHUB_ENV}
+        run: echo "OWNER_LC=${OWNER,,}" >> "${GITHUB_ENV}"
         env:
           OWNER: '${{ github.repository_owner }}'
+
       - name: 빌드 앤 푸시
-        uses: docker/build-push-action@v3
+        uses: docker/build-push-action@v5
         with:
-          context: .
+          context: ${{ github.workspace }}                            # 레포 루트 절대경로
+          file:    ${{ github.workspace }}/.github/workflows/Dockerfile # ⬅️ 절대경로로 고정
           push: true
           tags: |
             ghcr.io/${{ env.OWNER_LC }}/deploy-1:${{ needs.makeTagAndRelease.outputs.tag_name }},
